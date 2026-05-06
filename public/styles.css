@@ -146,6 +146,10 @@ label {
   min-height: 1.4rem;
 }
 
+.message[data-type="success"] {
+  color: var(--good);
+}
+
 .hidden {
   display: none !important;
 }

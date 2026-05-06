@@ -1,15 +1,52 @@
 # Debate Scorer
 
-A small real-time debate scoring app. One device can act as the scorer and other devices can join the same room as a live display. Score changes are sent immediately to every connected screen.
+A static real-time debate scoring website. Host the files in `public/` on any static host, connect it to Firebase Realtime Database, then use a room code and scorer PIN to update scores from another computer.
 
 ## Features
 
+- Static HTML, CSS, and JavaScript only
 - Create a debate room with two debater names
 - Use a scorer PIN to control the room from any device
 - Add or subtract one point at a time for either debater
 - Share a room code with display-only devices
-- Live score updates through Server-Sent Events
-- No database or third-party packages required
+- Live score updates through Firebase Realtime Database streaming
+
+## How the static version works
+
+Static websites cannot keep live state across different computers by themselves. This version keeps the website static and uses Firebase Realtime Database as the shared realtime data store. There is no custom app server to deploy.
+
+## Configure realtime sync
+
+1. Create a Firebase project at <https://console.firebase.google.com/>.
+2. Add a Realtime Database to the project.
+3. Copy the database URL. It usually looks like:
+
+   ```text
+   https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com
+   ```
+
+4. Put that URL in `public/config.js`:
+
+   ```js
+   window.DebateScorerConfig = {
+     databaseUrl: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+   };
+   ```
+
+5. For a simple private/practice setup, start with these Realtime Database rules:
+
+   ```json
+   {
+     "rules": {
+       "rooms": {
+         ".read": true,
+         ".write": true
+       }
+     }
+   }
+   ```
+
+The scorer PIN is hashed before it is stored, but these sample rules are intentionally simple. Anyone with the website and room code can read room data, so use this for casual scoring rather than sensitive events.
 
 ## Run locally
 
@@ -17,37 +54,37 @@ A small real-time debate scoring app. One device can act as the scorer and other
 npm start
 ```
 
-The app starts on port `3000` by default:
+Then open:
 
 ```text
-http://localhost:3000
+http://127.0.0.1:3000
 ```
 
-You can choose a different port:
+This local server only serves the static files from `public/`; it does not provide scoring APIs.
 
-```bash
-PORT=8080 npm start
-```
+## Deploy as a static website
 
-## Use on multiple devices
+Deploy the `public/` folder to any static host, for example:
 
-1. Start the app on the computer that will host the scoreboard.
-2. Open the app in a browser and create a room.
+- GitHub Pages
+- Netlify
+- Vercel static hosting
+- Firebase Hosting
+
+After deployment, open the hosted URL in a browser.
+
+## Use on multiple computers
+
+1. Open the deployed website.
+2. Create a scoreboard.
 3. Keep the room code and scorer PIN shown after room creation.
-4. On another device connected to the same network, open the host computer's network address, for example:
-
-   ```text
-   http://192.168.1.25:3000
-   ```
-
-5. Enter the room code to watch the live score, or enter the room code plus scorer PIN to control it.
+4. On another computer, open the same website.
+5. Enter the room code to watch the live score.
+6. Enter the room code plus scorer PIN to control the score from that computer.
+7. Press `+1` or `-1`; every connected screen should update automatically.
 
 ## Tests
 
 ```bash
 npm test
 ```
-
-## Notes
-
-Rooms are stored in memory. If the server restarts, active rooms and scores are cleared.

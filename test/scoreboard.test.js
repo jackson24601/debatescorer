@@ -1,53 +1,60 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { ScoreboardError, ScoreboardStore, normalizeRoomId } = require("../src/scoreboard");
+const {
+  ScoreboardError,
+  adjustScore,
+  createRoom,
+  normalizeRoomId,
+  resetScores,
+  verifyRoomPin,
+} = require("../public/scoreboard-core");
 
-function createStore() {
+function createOptions() {
   let nowTick = 0;
 
-  return new ScoreboardStore({
-    idGenerator: () => "ROOM42",
-    pinGenerator: () => "1234",
+  return {
+    roomId: "ROOM42",
+    controlPin: "1234",
     now: () => `2026-05-06T16:00:${String(nowTick++).padStart(2, "0")}.000Z`,
-  });
+  };
 }
 
-test("creates a room with public score data and a separate control PIN", () => {
-  const store = createStore();
-  const created = store.createRoom({
+test("creates a static room with public score data and a hashed PIN", async () => {
+  const created = await createRoom({
     title: "Practice debate",
     sides: [{ name: "Ada" }, { name: "Grace" }],
+    ...createOptions(),
   });
 
   assert.equal(created.controlPin, "1234");
-  assert.deepEqual(created.room, {
-    id: "ROOM42",
-    title: "Practice debate",
-    sides: [
-      { id: "affirmative", name: "Ada", score: 0 },
-      { id: "negative", name: "Grace", score: 0 },
-    ],
-    history: [],
-    createdAt: "2026-05-06T16:00:00.000Z",
-    updatedAt: "2026-05-06T16:00:00.000Z",
-  });
-  assert.equal(Object.hasOwn(created.room, "controlPin"), false);
+  assert.equal(created.room.id, "ROOM42");
+  assert.equal(created.room.title, "Practice debate");
+  assert.deepEqual(created.room.sides, [
+    { id: "affirmative", name: "Ada", score: 0 },
+    { id: "negative", name: "Grace", score: 0 },
+  ]);
+  assert.equal(created.room.history.length, 0);
+  assert.equal(created.room.controlPin, undefined);
+  assert.equal(typeof created.room.controlPinHash, "string");
+  assert.notEqual(created.room.controlPinHash, "1234");
 });
 
-test("adjusts one point at a time for either debater", () => {
-  const store = createStore();
-  store.createRoom({ sides: [{ name: "Ada" }, { name: "Grace" }] });
+test("adjusts one point at a time for either debater", async () => {
+  const options = createOptions();
+  const created = await createRoom({ sides: [{ name: "Ada" }, { name: "Grace" }], ...options });
 
-  let room = store.adjustScore("room42", {
+  let room = await adjustScore(created.room, {
     pin: "1234",
     sideId: "affirmative",
     delta: 1,
+    now: options.now,
   });
-  room = store.adjustScore("ROOM42", {
+  room = await adjustScore(room, {
     pin: "1234",
     sideId: "negative",
     delta: -1,
+    now: options.now,
   });
 
   assert.deepEqual(
@@ -63,13 +70,12 @@ test("adjusts one point at a time for either debater", () => {
   });
 });
 
-test("rejects invalid score changes", () => {
-  const store = createStore();
-  store.createRoom();
+test("rejects invalid score changes", async () => {
+  const created = await createRoom(createOptions());
 
-  assert.throws(
+  await assert.rejects(
     () =>
-      store.adjustScore("ROOM42", {
+      adjustScore(created.room, {
         pin: "1234",
         sideId: "affirmative",
         delta: 2,
@@ -78,37 +84,44 @@ test("rejects invalid score changes", () => {
   );
 });
 
-test("requires the scorer PIN to update or reset scores", () => {
-  const store = createStore();
-  store.createRoom();
+test("requires the scorer PIN to update or reset scores", async () => {
+  const created = await createRoom(createOptions());
 
-  assert.throws(
+  await assert.rejects(
     () =>
-      store.adjustScore("ROOM42", {
+      adjustScore(created.room, {
         pin: "0000",
         sideId: "affirmative",
         delta: 1,
       }),
-    (error) => error instanceof ScoreboardError && error.statusCode === 401,
+    (error) => error instanceof ScoreboardError && /incorrect/.test(error.message),
   );
 });
 
-test("resets both scores to zero", () => {
-  const store = createStore();
-  store.createRoom();
+test("resets both scores to zero", async () => {
+  const options = createOptions();
+  const created = await createRoom(options);
 
-  store.adjustScore("ROOM42", {
+  const scored = await adjustScore(created.room, {
     pin: "1234",
     sideId: "affirmative",
     delta: 1,
+    now: options.now,
   });
-  const room = store.resetScores("ROOM42", { pin: "1234" });
+  const room = await resetScores(scored, { pin: "1234", now: options.now });
 
   assert.deepEqual(
     room.sides.map((side) => side.score),
     [0, 0],
   );
   assert.equal(room.history[0].type, "reset");
+});
+
+test("verifies a scorer PIN without revealing the PIN", async () => {
+  const created = await createRoom(createOptions());
+
+  await assert.doesNotReject(() => verifyRoomPin(created.room, "1234"));
+  await assert.rejects(() => verifyRoomPin(created.room, "0000"), /incorrect/);
 });
 
 test("normalizes room codes for user-entered values", () => {

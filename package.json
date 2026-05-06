@@ -1,10 +1,9 @@
 {
   "name": "debatescorer",
   "version": "1.0.0",
-  "description": "A simple real-time debate scoring app.",
-  "main": "server.js",
+  "description": "A simple static real-time debate scoring website.",
   "scripts": {
-    "start": "node server.js",
+    "start": "node scripts/serve-static.js",
     "test": "node --test"
   },
   "keywords": [

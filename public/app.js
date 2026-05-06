@@ -1,7 +1,16 @@
+const {
+  adjustScore,
+  createRoom,
+  normalizeRoomId,
+  resetScores,
+  verifyRoomPin,
+} = window.ScoreboardCore;
+
 const appState = {
   room: null,
   pin: null,
-  eventSource: null,
+  unsubscribe: null,
+  database: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -17,9 +26,12 @@ const copyRoomLinkButton = $("copy-room-link");
 const connectionStatus = $("connection-status");
 const alertBox = $("alert");
 
+bootstrap();
+
 createForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   clearAlert();
+  requireDatabase();
 
   const data = new FormData(createForm);
   const payload = {
@@ -29,51 +41,44 @@ createForm.addEventListener("submit", async (event) => {
       { name: data.get("sideB") },
     ],
   };
+  const created = await createUniqueRoom(payload);
 
-  const response = await apiRequest("/api/rooms", {
-    method: "POST",
-    body: payload,
-  });
-
-  appState.pin = response.controlPin;
-  enterRoom(response.room);
-  $("new-room-pin").textContent = response.controlPin;
+  appState.pin = created.controlPin;
+  enterRoom(created.room);
+  $("new-room-pin").textContent = created.controlPin;
   $("new-room-details").hidden = false;
-  showAlert(`Room ${response.room.id} is ready. Share the room code with viewers.`, "success");
+  showAlert(`Room ${created.room.id} is ready. Share the room code with viewers.`, "success");
 });
 
 watchForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   clearAlert();
+  requireDatabase();
 
   const roomId = normalizeRoomId(new FormData(watchForm).get("roomId"));
-  const response = await apiRequest(`/api/rooms/${roomId}`);
+  const room = await appState.database.getRoom(roomId);
 
   appState.pin = null;
-  enterRoom(response.room);
+  enterRoom(room);
 });
 
 controlForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   clearAlert();
+  requireDatabase();
 
   const data = new FormData(controlForm);
   const roomId = normalizeRoomId(data.get("roomId"));
   const pin = String(data.get("pin") || "").trim();
-  const response = await apiRequest(`/api/rooms/${roomId}/control`, {
-    method: "POST",
-    body: { pin },
-  });
+  const room = await appState.database.getRoom(roomId);
+  await verifyRoomPin(room, pin);
 
   appState.pin = pin;
-  enterRoom(response.room);
+  enterRoom(room);
 });
 
 leaveButton.addEventListener("click", () => {
-  if (appState.eventSource) {
-    appState.eventSource.close();
-  }
-
+  disconnectFromRoom();
   appState.room = null;
   appState.pin = null;
   render();
@@ -88,12 +93,10 @@ resetButton.addEventListener("click", async () => {
     return;
   }
 
-  const response = await apiRequest(`/api/rooms/${appState.room.id}/reset`, {
-    method: "POST",
-    body: { pin: appState.pin },
-  });
-
-  updateRoom(response.room);
+  const latestRoom = await appState.database.getRoom(appState.room.id);
+  const nextRoom = await resetScores(latestRoom, { pin: appState.pin });
+  await appState.database.saveRoom(nextRoom);
+  updateRoom(nextRoom);
 });
 
 copyRoomLinkButton.addEventListener("click", async () => {
@@ -101,13 +104,13 @@ copyRoomLinkButton.addEventListener("click", async () => {
     return;
   }
 
-  const text = `${window.location.origin}\nRoom code: ${appState.room.id}`;
+  const text = `${roomUrl(appState.room.id)}\nRoom code: ${appState.room.id}`;
 
   try {
     await navigator.clipboard.writeText(text);
     showAlert("Room link and code copied.", "success");
   } catch {
-    showAlert(`Share this address and room code: ${text}`, "success");
+    showAlert(`Share this link and room code: ${text}`, "success");
   }
 });
 
@@ -118,21 +121,55 @@ document.addEventListener("click", async (event) => {
   }
 
   clearAlert();
-  const response = await apiRequest(`/api/rooms/${appState.room.id}/adjust`, {
-    method: "POST",
-    body: {
-      pin: appState.pin,
-      sideId: button.dataset.sideId,
-      delta: Number(button.dataset.scoreAction),
-    },
+  const latestRoom = await appState.database.getRoom(appState.room.id);
+  const nextRoom = await adjustScore(latestRoom, {
+    pin: appState.pin,
+    sideId: button.dataset.sideId,
+    delta: Number(button.dataset.scoreAction),
   });
 
-  updateRoom(response.room);
+  await appState.database.saveRoom(nextRoom);
+  updateRoom(nextRoom);
 });
+
+function bootstrap() {
+  const config = window.DebateScorerConfig || {};
+  const databaseUrl = String(config.databaseUrl || "").trim();
+  const roomId = normalizeRoomId(new URLSearchParams(window.location.search).get("room"));
+
+  if (roomId) {
+    for (const input of document.querySelectorAll('input[name="roomId"]')) {
+      input.value = roomId;
+    }
+  }
+
+  if (!databaseUrl) {
+    showAlert("Add your Firebase Realtime Database URL in public/config.js before using multi-device scoring.");
+    setFormsDisabled(true);
+    return;
+  }
+
+  appState.database = new FirebaseRoomDatabase(databaseUrl);
+  setConnectionStatus("Ready", "idle");
+}
+
+async function createUniqueRoom(payload) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const created = await createRoom(payload);
+    const existingRoom = await appState.database.findRoom(created.room.id);
+
+    if (!existingRoom) {
+      await appState.database.saveRoom(created.room);
+      return created;
+    }
+  }
+
+  throw new Error("Could not create a unique room code. Please try again.");
+}
 
 function enterRoom(room) {
   updateRoom(room);
-  connectToRoomEvents(room.id);
+  connectToRoom(room.id);
   render();
 }
 
@@ -141,26 +178,29 @@ function updateRoom(room) {
   render();
 }
 
-function connectToRoomEvents(roomId) {
-  if (appState.eventSource) {
-    appState.eventSource.close();
-  }
-
-  appState.eventSource = new EventSource(`/api/rooms/${roomId}/events`);
+function connectToRoom(roomId) {
+  disconnectFromRoom();
   setConnectionStatus("Connecting...", "pending");
 
-  appState.eventSource.addEventListener("open", () => {
-    setConnectionStatus("Live", "live");
-  });
+  appState.unsubscribe = appState.database.subscribeRoom(
+    roomId,
+    (room) => {
+      if (room) {
+        updateRoom(room);
+        setConnectionStatus("Live", "live");
+      }
+    },
+    (status) => {
+      setConnectionStatus(status, status === "Live" ? "live" : "pending");
+    },
+  );
+}
 
-  appState.eventSource.addEventListener("room", (event) => {
-    updateRoom(JSON.parse(event.data));
-    setConnectionStatus("Live", "live");
-  });
-
-  appState.eventSource.addEventListener("error", () => {
-    setConnectionStatus("Reconnecting...", "pending");
-  });
+function disconnectFromRoom() {
+  if (appState.unsubscribe) {
+    appState.unsubscribe();
+    appState.unsubscribe = null;
+  }
 }
 
 function render() {
@@ -178,7 +218,7 @@ function render() {
   $("room-title").textContent = room.title;
   $("room-code").textContent = room.id;
   $("room-code-repeat").textContent = room.id;
-  $("room-link").textContent = window.location.origin;
+  $("room-link").textContent = roomUrl(room.id);
   $("score-mode").textContent = appState.pin ? "Scorer controls enabled" : "Viewer mode";
   $("controller-panel").hidden = !appState.pin;
 
@@ -245,26 +285,6 @@ function render() {
   );
 }
 
-async function apiRequest(path, options = {}) {
-  const response = await fetch(path, {
-    method: options.method || "GET",
-    headers: options.body ? { "content-type": "application/json" } : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-
-  const payload = await response.json();
-
-  if (!response.ok) {
-    throw new Error(payload.error || "Request failed.");
-  }
-
-  return payload;
-}
-
-function normalizeRoomId(value) {
-  return String(value || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
-}
-
 function setConnectionStatus(message, status) {
   connectionStatus.textContent = message;
   connectionStatus.dataset.status = status;
@@ -281,6 +301,121 @@ function clearAlert() {
   alertBox.textContent = "";
 }
 
+function setFormsDisabled(disabled) {
+  for (const element of document.querySelectorAll("form button, form input")) {
+    element.disabled = disabled;
+  }
+}
+
+function requireDatabase() {
+  if (!appState.database) {
+    throw new Error("The realtime database is not configured yet.");
+  }
+}
+
+function roomUrl(roomId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("room", roomId);
+  return url.toString();
+}
+
 window.addEventListener("unhandledrejection", (event) => {
   showAlert(event.reason?.message || "Something went wrong.");
 });
+
+class FirebaseRoomDatabase {
+  constructor(databaseUrl) {
+    this.databaseUrl = databaseUrl.replace(/\/+$/, "");
+  }
+
+  async findRoom(roomId) {
+    const normalizedRoomId = normalizeRoomId(roomId);
+    if (normalizedRoomId.length !== 6) {
+      return null;
+    }
+
+    const response = await fetch(this.roomEndpoint(roomId), {
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      throw new Error(`Could not load room ${roomId}. Check your Firebase database rules.`);
+    }
+
+    return response.json();
+  }
+
+  async getRoom(roomId) {
+    const normalizedRoomId = normalizeRoomId(roomId);
+    if (normalizedRoomId.length !== 6) {
+      throw new Error("Enter a 6-character room code.");
+    }
+
+    const room = await this.findRoom(normalizedRoomId);
+
+    if (!room) {
+      throw new Error("Scoreboard room not found.");
+    }
+
+    return room;
+  }
+
+  async saveRoom(room) {
+    const response = await fetch(this.roomEndpoint(room.id), {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(room),
+    });
+
+    if (!response.ok) {
+      throw new Error("Could not save the score. Check your Firebase database rules.");
+    }
+
+    return response.json();
+  }
+
+  subscribeRoom(roomId, onRoom, onStatus) {
+    const events = new EventSource(this.roomEndpoint(roomId));
+    let currentRoom = null;
+
+    events.addEventListener("open", () => onStatus("Live"));
+    events.addEventListener("error", () => onStatus("Reconnecting..."));
+    events.addEventListener("put", (event) => {
+      const message = JSON.parse(event.data);
+      currentRoom = applyFirebaseMessage(currentRoom, message);
+      onRoom(currentRoom);
+    });
+    events.addEventListener("patch", (event) => {
+      const message = JSON.parse(event.data);
+      currentRoom = applyFirebaseMessage(currentRoom, message);
+      onRoom(currentRoom);
+    });
+
+    return () => events.close();
+  }
+
+  roomEndpoint(roomId) {
+    return `${this.databaseUrl}/rooms/${encodeURIComponent(normalizeRoomId(roomId))}.json`;
+  }
+}
+
+function applyFirebaseMessage(currentRoom, message) {
+  if (message.path === "/") {
+    return message.data;
+  }
+
+  const nextRoom = JSON.parse(JSON.stringify(currentRoom || {}));
+  const keys = message.path.split("/").filter(Boolean);
+  let target = nextRoom;
+
+  for (const key of keys.slice(0, -1)) {
+    if (!target[key] || typeof target[key] !== "object") {
+      target[key] = {};
+    }
+
+    target = target[key];
+  }
+
+  target[keys[keys.length - 1]] = message.data;
+  return nextRoom;
+}
