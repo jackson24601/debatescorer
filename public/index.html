@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Debate Scorer</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero">
+        <p class="eyebrow">Real-time debate scoring</p>
+        <h1>Score a simple debate live from any device.</h1>
+        <p>
+          Create a room, share the room code with the debaters, then add or
+          subtract one point at a time while their screen updates instantly.
+        </p>
+      </section>
+
+      <p id="alert" class="message" hidden></p>
+
+      <section id="home-view" class="panel-grid">
+        <form id="create-form" class="card stack">
+          <h2>Create a scoreboard</h2>
+          <label>
+            Debate title
+            <input name="title" maxlength="80" placeholder="Practice debate" />
+          </label>
+          <label>
+            First debater/team
+            <input name="sideA" maxlength="40" placeholder="Debater A" />
+          </label>
+          <label>
+            Second debater/team
+            <input name="sideB" maxlength="40" placeholder="Debater B" />
+          </label>
+          <button type="submit" class="primary">Create room</button>
+        </form>
+
+        <form id="watch-form" class="card stack">
+          <h2>Watch a scoreboard</h2>
+          <label>
+            Room code
+            <input
+              name="roomId"
+              maxlength="6"
+              autocomplete="off"
+              autocapitalize="characters"
+              placeholder="ABC123"
+            />
+          </label>
+          <button type="submit" class="secondary">Watch score</button>
+        </form>
+
+        <form id="control-form" class="card stack">
+          <h2>Control from another device</h2>
+          <label>
+            Room code
+            <input
+              name="roomId"
+              maxlength="6"
+              autocomplete="off"
+              autocapitalize="characters"
+              placeholder="ABC123"
+            />
+          </label>
+          <label>
+            Scorer PIN
+            <input
+              name="pin"
+              maxlength="4"
+              inputmode="numeric"
+              autocomplete="off"
+              placeholder="1234"
+            />
+          </label>
+          <button type="submit" class="primary">Control score</button>
+        </form>
+      </section>
+
+      <section id="room-view" hidden>
+        <header class="room-header card">
+          <div>
+            <p class="eyebrow">Room <span id="room-code"></span></p>
+            <h2 id="room-title"></h2>
+            <div class="room-meta">
+              <span id="connection-status" class="pill connection">Connecting...</span>
+              <span id="score-mode" class="pill">Viewer mode</span>
+            </div>
+          </div>
+          <div class="stack">
+            <button id="copy-room-link" type="button" class="secondary">Copy link</button>
+            <button id="leave-button" type="button" class="danger">Leave room</button>
+          </div>
+        </header>
+
+        <section id="score-cards" class="scoreboard" aria-live="polite"></section>
+
+        <div class="session-details">
+          <section id="controller-panel" class="card stack" hidden>
+            <div>
+              <p class="eyebrow">Scorer controls</p>
+              <h2>Add or subtract one point</h2>
+            </div>
+            <div id="score-controls" class="score-controls"></div>
+            <button id="reset-button" type="button" class="danger">Reset scores</button>
+          </section>
+
+          <section class="card stack">
+            <div id="new-room-details" class="share-box" hidden>
+              <p><strong>Scorer PIN:</strong> <span id="new-room-pin"></span></p>
+              <p>Use this PIN to control the score from another device.</p>
+            </div>
+            <div class="share-box">
+              <p><strong>Open on another device:</strong> <span id="room-link"></span></p>
+              <p>Then enter room code <strong id="room-code-repeat"></strong>.</p>
+            </div>
+            <div>
+              <p class="eyebrow">Recent changes</p>
+              <h2>Score history</h2>
+              <ol id="history" class="history"></ol>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
